@@ -19,34 +19,32 @@ pip install -e libs/vynn_core
 ```
 
 ### Configuration
-Set environment variables in your consuming application:
+vynn_core automatically loads environment variables from a `.env` file in your project root.
 
-**Option 1: Environment Variables**
+**Step 1: Create .env file in your project**
 ```bash
-export MONGO_URI="mongodb+srv://username:password@cluster.mongodb.net/"
-export MONGO_DB="your-database-name"
-export REDIS_URL="redis://localhost:6379/0"
-```
-
-**Option 2: .env File (recommended)**
-```bash
-# Copy .env.example to .env and update values
-cp .env.example .env
-
-# Edit .env with your actual credentials
+# In your backend/application root directory
 MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/
 MONGO_DB=your-database-name
 REDIS_URL=redis://localhost:6379/0
 ```
 
-**Option 3: Direct Import (development only)**
+**Step 2: Import vynn_core (it will automatically load .env)**
 ```python
-# Not recommended for production
-import os
-os.environ["MONGO_URI"] = "your-connection-string"
-os.environ["MONGO_DB"] = "your-database"
+# vynn_core will automatically find and load your .env file
+from vynn_core import Article, init_indexes, upsert_articles
 
-from vynn_core import init_indexes
+# Initialize database
+init_indexes()
+```
+
+**Debugging Configuration Issues**
+```python
+from vynn_core.config import validate_config
+
+# This will show you what .env file was found and which variables are loaded
+config_info = validate_config()
+print(config_info)
 ```
 
 ### Basic Usage
