@@ -19,11 +19,34 @@ pip install -e libs/vynn_core
 ```
 
 ### Configuration
-Set environment variables or update `vynn_core/config.py`:
+Set environment variables in your consuming application:
+
+**Option 1: Environment Variables**
 ```bash
 export MONGO_URI="mongodb+srv://username:password@cluster.mongodb.net/"
 export MONGO_DB="your-database-name"
 export REDIS_URL="redis://localhost:6379/0"
+```
+
+**Option 2: .env File (recommended)**
+```bash
+# Copy .env.example to .env and update values
+cp .env.example .env
+
+# Edit .env with your actual credentials
+MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/
+MONGO_DB=your-database-name
+REDIS_URL=redis://localhost:6379/0
+```
+
+**Option 3: Direct Import (development only)**
+```python
+# Not recommended for production
+import os
+os.environ["MONGO_URI"] = "your-connection-string"
+os.environ["MONGO_DB"] = "your-database"
+
+from vynn_core import init_indexes
 ```
 
 ### Basic Usage
