@@ -6,10 +6,11 @@ from pymongo.errors import DuplicateKeyError
 from typing import List, Dict, Union
 from bson import ObjectId
 import logging
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
-def upsert_articles(docs: List[Union[dict, Article]], collection_name: str = "articles") -> Dict[str, List[str]]:
+def upsert_articles(docs: List[Union[dict, Article]], collection_name: str) -> Dict[str, List[str]]:
     """
     Upsert articles to MongoDB. Returns counts of created, updated, and skipped articles.
     
@@ -73,7 +74,7 @@ def upsert_articles(docs: List[Union[dict, Article]], collection_name: str = "ar
     
     return {"created": created, "updated": updated, "skipped": skipped}
 
-def get_articles_by_ids(ids: List[str], collection_name: str = "articles") -> List[dict]:
+def get_articles_by_ids(ids: List[str], collection_name: str) -> List[dict]:
     """Get articles by their MongoDB ObjectId strings."""
     db = get_db()
     collection = db[collection_name]
@@ -84,20 +85,35 @@ def get_articles_by_ids(ids: List[str], collection_name: str = "articles") -> Li
         logger.error(f"Error fetching articles by IDs: {e}")
         return []
 
-def find_recent(limit: int = 50, source: str = None, collection_name: str = "articles") -> List[dict]:
-    """Find recent articles, optionally filtered by source."""
+def find_recent(collection_name: str, limit: int = 50, before_date: str = None) -> List[dict]:
+    """
+    Find recent articles, optionally filtered by date and source.
+    
+    Args:
+        limit: Maximum number of articles to return (default: 50)
+        before_date: ISO format timestamp string (e.g., "2025-10-29T18:06:29.275930"). 
+                     Returns only articles published before this date.
+        source: Filter by article source (optional)
+        collection_name: Name of the MongoDB collection (default: "articles")
+        
+    Returns:
+        List of article documents sorted by publish_date in descending order
+    """
     db = get_db()
     collection = db[collection_name]
     try:
         query = {}
-        if source:
-            query["source"] = source
-        return list(collection.find(query).sort("publishedAt", -1).limit(limit))
+        
+        # Filter by date if provided
+        if before_date:
+            query["publish_date"] = {"$lt": before_date}
+            
+        return list(collection.find(query).sort("publish_date", -1).limit(limit))
     except Exception as e:
         logger.error(f"Error fetching recent articles: {e}")
         return []
 
-def get_article_by_url(url: str, collection_name: str = "articles") -> dict:
+def get_article_by_url(url: str, collection_name: str) -> dict:
     """Get article by URL (using urlHash for efficient lookup)."""
     db = get_db()
     collection = db[collection_name]
@@ -107,3 +123,65 @@ def get_article_by_url(url: str, collection_name: str = "articles") -> dict:
     except Exception as e:
         logger.error(f"Error fetching article by URL: {e}")
         return None
+
+def get_last_2_hours_news(collection_name: str) -> List[dict]:
+    """
+    Get articles from the last 2 hours.
+    
+    Uses real-time UTC to calculate the cutoff time, ensuring it works correctly
+    in Docker containers and across different timezones.
+    
+    Args:
+        collection_name: Name of the MongoDB collection
+        limit: Maximum number of articles to return (default: 100)
+        
+    Returns:
+        List of article documents from the last 2 hours, sorted by publish_date descending
+    """
+    db = get_db()
+    collection = db[collection_name]
+    try:
+        # Get current UTC time and calculate 2 hours ago
+        now = utc_now()
+        two_hours_ago = now - timedelta(hours=2)
+        cutoff_time = two_hours_ago.isoformat()
+        
+        # Query for articles published after 2 hours ago
+        query = {"publish_date": {"$gte": cutoff_time}}
+        
+        logger.debug(f"Fetching articles from last 2 hours (since {cutoff_time})")
+        return list(collection.find(query).sort("publish_date", -1))
+    except Exception as e:
+        logger.error(f"Error fetching last 2 hours news: {e}")
+        return []
+
+def get_last_24_hours_news(collection_name: str) -> List[dict]:
+    """
+    Get articles from the last 24 hours.
+    
+    Uses real-time UTC to calculate the cutoff time, ensuring it works correctly
+    in Docker containers and across different timezones.
+    
+    Args:
+        collection_name: Name of the MongoDB collection
+        limit: Maximum number of articles to return (default: 500)
+        
+    Returns:
+        List of article documents from the last 24 hours, sorted by publish_date descending
+    """
+    db = get_db()
+    collection = db[collection_name]
+    try:
+        # Get current UTC time and calculate 24 hours ago
+        now = utc_now()
+        twenty_four_hours_ago = now - timedelta(hours=24)
+        cutoff_time = twenty_four_hours_ago.isoformat()
+        
+        # Query for articles published after 24 hours ago
+        query = {"publish_date": {"$gte": cutoff_time}}
+        
+        logger.debug(f"Fetching articles from last 24 hours (since {cutoff_time})")
+        return list(collection.find(query).sort("publish_date", -1))
+    except Exception as e:
+        logger.error(f"Error fetching last 24 hours news: {e}")
+        return []
