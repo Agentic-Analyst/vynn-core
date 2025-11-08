@@ -124,7 +124,7 @@ def get_article_by_url(url: str, collection_name: str) -> dict:
         logger.error(f"Error fetching article by URL: {e}")
         return None
 
-def get_last_n_hours_news(collection_name: str, n_hours: int) -> List[dict]:
+def get_last_n_hours_news(collection_name: str, n_hours_ago: int) -> List[dict]:
     """
     Get articles from the last n hours.
 
@@ -145,7 +145,7 @@ def get_last_n_hours_news(collection_name: str, n_hours: int) -> List[dict]:
     try:
         # Get current UTC time and calculate cutoff
         now = utc_now()
-        cutoff_datetime = now - timedelta(hours=n_hours)
+        cutoff_datetime = now - timedelta(hours=n_hours_ago)
         
         # Format as ISO string without timezone suffix to match DB format
         # Database stores: "2025-11-01T15:56:39.542998"
@@ -154,11 +154,11 @@ def get_last_n_hours_news(collection_name: str, n_hours: int) -> List[dict]:
         # Query for articles published after the cutoff time
         query = {"publish_date": {"$gte": cutoff_time}}
 
-        logger.info(f"Fetching articles from last {n_hours} hours (cutoff: {cutoff_time}, current UTC: {now.replace(tzinfo=None).isoformat()})")
+        logger.info(f"Fetching articles from last {n_hours_ago} hours (cutoff: {cutoff_time}, current UTC: {now.replace(tzinfo=None).isoformat()})")
         results = list(collection.find(query).sort("publish_date", -1))
-        logger.info(f"Found {len(results)} articles from last {n_hours} hours")
-        
+        logger.info(f"Found {len(results)} articles from last {n_hours_ago} hours")
+
         return results
     except Exception as e:
-        logger.error(f"Error fetching last {n_hours} hours news: {e}")
+        logger.error(f"Error fetching last {n_hours_ago} hours news: {e}")
         return []
