@@ -124,7 +124,7 @@ def get_article_by_url(url: str, collection_name: str) -> dict:
         logger.error(f"Error fetching article by URL: {e}")
         return None
 
-def get_last_n_hours_news(collection_name: str, n_hours_ago: int) -> List[dict]:
+def get_last_n_hours_news(collection_name: str, n_hours: int) -> List[dict]:
     """
     Get articles from the last n hours.
 
@@ -133,25 +133,32 @@ def get_last_n_hours_news(collection_name: str, n_hours_ago: int) -> List[dict]:
     
     Args:
         collection_name: Name of the MongoDB collection
-        n: Number of hours to look back
-        limit: Maximum number of articles to return (default: 500)
+        n_hours: Number of hours to look back
         
     Returns:
         List of article documents from the last n hours, sorted by publish_date descending
     """
+    from datetime import timedelta
+    
     db = get_db()
     collection = db[collection_name]
     try:
-        # Get current UTC time and calculate n hours ago
+        # Get current UTC time and calculate cutoff
         now = utc_now()
-        n_hours_ago = now - timedelta(hours=n_hours_ago)
-        cutoff_time = n_hours_ago.isoformat()
+        cutoff_datetime = now - timedelta(hours=n_hours)
+        
+        # Format as ISO string without timezone suffix to match DB format
+        # Database stores: "2025-11-01T15:56:39.542998"
+        cutoff_time = cutoff_datetime.replace(tzinfo=None).isoformat()
 
-        # Query for articles published after n hours ago
+        # Query for articles published after the cutoff time
         query = {"publish_date": {"$gte": cutoff_time}}
 
-        logger.debug(f"Fetching articles from last {n_hours_ago} hours (since {cutoff_time})")
-        return list(collection.find(query).sort("publish_date", -1))
+        logger.info(f"Fetching articles from last {n_hours} hours (cutoff: {cutoff_time}, current UTC: {now.replace(tzinfo=None).isoformat()})")
+        results = list(collection.find(query).sort("publish_date", -1))
+        logger.info(f"Found {len(results)} articles from last {n_hours} hours")
+        
+        return results
     except Exception as e:
-        logger.error(f"Error fetching last {n_hours_ago} hours news: {e}")
+        logger.error(f"Error fetching last {n_hours} hours news: {e}")
         return []
