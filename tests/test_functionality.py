@@ -11,7 +11,7 @@ from pprint import pprint
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def test_models_and_utils():
+def check_models_and_utils():
     """Test models and utility functions without DB connection."""
     print("=" * 60)
     print("TESTING MODELS AND UTILITIES (No DB Required)")
@@ -79,7 +79,7 @@ def test_models_and_utils():
         traceback.print_exc()
         return False
 
-def test_article_serialization():
+def check_article_serialization():
     """Test article creation from dict (like what would come from a scraper)."""
     print("\n" + "=" * 60)
     print("TESTING ARTICLE SERIALIZATION")
@@ -225,6 +225,16 @@ def simulate_scraper_integration():
         traceback.print_exc()
         return False
 
+def test_models_and_utils():
+    """Pytest wrapper: a False diagnostic result must fail the test."""
+    assert check_models_and_utils()
+
+
+def test_article_serialization():
+    """Pytest wrapper: a False diagnostic result must fail the test."""
+    assert check_article_serialization()
+
+
 def main():
     """Run all tests that don't require database connectivity."""
     print("🧪 Testing vynn_core functionality (No Database Required)")
@@ -234,11 +244,11 @@ def main():
     total_tests = 3
     
     # Test 1: Models and Utilities
-    if test_models_and_utils():
+    if check_models_and_utils():
         success_count += 1
     
     # Test 2: Article Serialization
-    if test_article_serialization():
+    if check_article_serialization():
         success_count += 1
         
     # Test 3: Scraper Integration Simulation
