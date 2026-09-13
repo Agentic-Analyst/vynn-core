@@ -22,7 +22,7 @@ class Article(BaseModel):
     def generate_url_hash(self):
         """Auto-generate urlHash if not provided."""
         if not self.urlHash:
-            from ..utils.hashing import url_hash
+            from .utils.hashing import url_hash
             self.urlHash = url_hash(self.url)
         return self
     

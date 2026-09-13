@@ -6,11 +6,32 @@ from pymongo.errors import DuplicateKeyError
 from typing import List, Dict, Union
 from bson import ObjectId
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-def upsert_articles(docs: List[Union[dict, Article]], collection_name: str) -> Dict[str, List[str]]:
+
+def _mongo_normalize(value):
+    """Mirror BSON datetime semantics before comparing or persisting values.
+
+    MongoDB stores datetimes as UTC milliseconds and PyMongo returns them as
+    naive UTC by default.  Comparing an aware, microsecond-precision scraper
+    timestamp with the stored value otherwise makes an unchanged article look
+    modified on every ingestion pass.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+    if isinstance(value, dict):
+        return {key: _mongo_normalize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_mongo_normalize(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_mongo_normalize(item) for item in value)
+    return value
+
+def upsert_articles(docs: List[Union[dict, Article]], collection_name: str = "articles") -> Dict[str, List[str]]:
     """
     Upsert articles to MongoDB. Returns counts of created, updated, and skipped articles.
     
@@ -32,22 +53,41 @@ def upsert_articles(docs: List[Union[dict, Article]], collection_name: str) -> D
                 doc_dict = doc.to_mongo_dict()
             else:
                 doc_dict = doc.copy()
+
+            doc_dict = _mongo_normalize(doc_dict)
             
             # Ensure urlHash is present
             if not doc_dict.get("urlHash"):
                 doc_dict["urlHash"] = url_hash(doc_dict["url"])
             
-            # Set timestamps
+            # Updating ``updatedAt`` before comparing made every identical
+            # article look modified, so the advertised ``skipped`` outcome was
+            # unreachable.  Compare source fields first and touch updatedAt
+            # only when content actually changed.
+            existing = collection.find_one({"urlHash": doc_dict["urlHash"]})
+            comparable = {
+                key: value for key, value in doc_dict.items()
+                if key not in {"_id", "createdAt", "updatedAt"}
+            }
+            if existing is not None and all(
+                _mongo_normalize(existing.get(key)) == value
+                for key, value in comparable.items()
+            ):
+                skipped.append(doc_dict["urlHash"])
+                logger.debug(
+                    f"Skipped article (no changes): {doc_dict.get('title', 'Unknown')}"
+                )
+                continue
+
             now = utc_now()
-            doc_dict.setdefault("createdAt", now)
-            doc_dict["updatedAt"] = now
+            update_fields = {**comparable, "updatedAt": now}
             
             # Upsert operation
             result = collection.update_one(
                 {"urlHash": doc_dict["urlHash"]},
                 {
-                    "$set": {k: v for k, v in doc_dict.items() if k != "createdAt"},
-                    "$setOnInsert": {"createdAt": doc_dict["createdAt"]}
+                    "$set": update_fields,
+                    "$setOnInsert": {"createdAt": doc_dict.get("createdAt") or now}
                 },
                 upsert=True
             )
@@ -74,7 +114,7 @@ def upsert_articles(docs: List[Union[dict, Article]], collection_name: str) -> D
     
     return {"created": created, "updated": updated, "skipped": skipped}
 
-def get_articles_by_ids(ids: List[str], collection_name: str) -> List[dict]:
+def get_articles_by_ids(ids: List[str], collection_name: str = "articles") -> List[dict]:
     """Get articles by their MongoDB ObjectId strings."""
     db = get_db()
     collection = db[collection_name]
@@ -85,7 +125,7 @@ def get_articles_by_ids(ids: List[str], collection_name: str) -> List[dict]:
         logger.error(f"Error fetching articles by IDs: {e}")
         return []
 
-def find_recent(collection_name: str, limit: int = 50, before_date: str = None) -> List[dict]:
+def find_recent(collection_name: str = "articles", limit: int = 50, before_date: str = None) -> List[dict]:
     """
     Find recent articles, optionally filtered by date and source.
     
@@ -113,7 +153,7 @@ def find_recent(collection_name: str, limit: int = 50, before_date: str = None) 
         logger.error(f"Error fetching recent articles: {e}")
         return []
 
-def get_article_by_url(url: str, collection_name: str) -> dict:
+def get_article_by_url(url: str, collection_name: str = "articles") -> dict:
     """Get article by URL (using urlHash for efficient lookup)."""
     db = get_db()
     collection = db[collection_name]
@@ -124,7 +164,7 @@ def get_article_by_url(url: str, collection_name: str) -> dict:
         logger.error(f"Error fetching article by URL: {e}")
         return None
 
-def get_last_n_hours_news(collection_name: str, n_hours_ago: int) -> List[dict]:
+def get_last_n_hours_news(collection_name: str = "articles", n_hours_ago: int = 24) -> List[dict]:
     """
     Get articles from the last n hours.
 

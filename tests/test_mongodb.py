@@ -13,6 +13,16 @@ from pprint import pprint
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# This file is an operator connectivity script, not an isolated unit test.  It
+# intentionally contacts the configured database when executed directly; do
+# not let ordinary ``pytest`` collection hang on or mutate a developer's local
+# or production Mongo instance.
+if "pytest" in sys.modules:
+    import pytest
+    pytestmark = pytest.mark.skip(
+        reason="operator Mongo connectivity script; run tests/test_mongodb.py directly"
+    )
+
 def test_mongodb_connection():
     """Test basic MongoDB connection."""
     print("=" * 50)

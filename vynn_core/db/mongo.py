@@ -11,6 +11,8 @@ _mongo_lock = Lock()
 def get_mongo_client():
     """Get singleton MongoDB client with connection pooling."""
     global _mongo_client
+    if not isinstance(MONGO_URI, str) or not MONGO_URI.strip():
+        raise RuntimeError("MONGO_URI is not configured")
     if _mongo_client is None:
         with _mongo_lock:
             if _mongo_client is None:
@@ -26,6 +28,8 @@ def get_mongo_client():
 
 def get_db():
     """Get the configured database."""
+    if not isinstance(MONGO_DB, str) or not MONGO_DB.strip():
+        raise RuntimeError("MONGO_DB is not configured")
     return get_mongo_client()[MONGO_DB]
 
 def init_indexes(collection_name: str = "articles"):
@@ -55,6 +59,17 @@ def init_indexes(collection_name: str = "articles"):
             [("publishedAt", DESCENDING)], 
             name="publishedAt_desc",
             background=True
+        )
+
+        # The stock-analysis ingestion contract stores source timestamps as
+        # ISO ``publish_date`` strings.  Keep the original ``publishedAt``
+        # index for the typed Article model, and index the actively queried
+        # compatibility field as well; otherwise every ticker news refresh
+        # sorts the collection in memory.
+        collection.create_index(
+            [("publish_date", DESCENDING)],
+            name="publish_date_desc",
+            background=True,
         )
         
         # Optional: users.watchlist.tickers (if using user matching later)
