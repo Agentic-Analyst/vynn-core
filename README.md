@@ -1,184 +1,148 @@
 # vynn_core
 
-Minimal, production-ready news feed data layer for MongoDB/Redis.
+[![License: All Rights Reserved](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](.github/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-4%20passed%2C%203%20skipped-brightgreen.svg)](.github/workflows/ci.yml)
 
-## Features
-- 🗄️ Singleton Mongo/Redis clients with connection pooling
-- 📰 Article upsert, dedupe, and retrieval with URL hashing
-- 👥 User matching by watchlist (extensible)
-- 📡 Feed fan-out with Redis ZADD
-- ✅ Pydantic schema validation for articles
-- 🔄 Idempotent index creation and operations
-- 🧪 Comprehensive testing with mongomock support
+Shared article-persistence layer for MongoDB/Redis, used by the VYNN backends.
+465 source lines across 12 modules.
 
-## Quick Start
+Its one job is to make ingestion **idempotent**: the same article scraped twice
+must not become two rows, and must not report itself as changed when nothing
+changed.
 
-### Installation
-```bash
-pip install -e libs/vynn_core
+## Install
+
+This is a standalone repository with a `pyproject.toml`. Consumers install it by
+git SHA — pin it, never track a branch, so both backends deserialise the same
+document shape:
+
+```
+vynn-core @ git+https://github.com/Agentic-Analyst/vynn-core.git@a28639fc7521af7f1a6d498cfa4d343433929492
 ```
 
-### Configuration
-vynn_core automatically loads environment variables from a `.env` file in your project root.
+Both `api-runner` and `stock-analyst` currently pin `a28639f`. To work on the
+library itself:
 
-**Step 1: Create .env file in your project**
 ```bash
-# In your backend/application root directory
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/
+pip install -e .          # add [test] for mongomock + pytest
+```
+
+## Configure
+
+Three environment variables. `MONGO_URI` and `MONGO_DB` have **no defaults** —
+`get_db()` raises `RuntimeError` if either is unset or blank. `REDIS_URL`
+defaults to `redis://localhost:6379`.
+
+```bash
+MONGO_URI=mongodb+srv://user:password@cluster.mongodb.net/
 MONGO_DB=your-database-name
 REDIS_URL=redis://localhost:6379/0
 ```
 
-**Step 2: Import vynn_core (it will automatically load .env)**
+These are read with `os.getenv` at import time. The package does **not** call
+`load_dotenv`, so a `.env` file is not picked up automatically — load it in your
+application before importing, or export the variables in the environment.
+
+## Usage
+
 ```python
-# vynn_core will automatically find and load your .env file
-from vynn_core import Article, init_indexes, upsert_articles
-
-# Initialize database
-init_indexes()
-```
-
-**Debugging Configuration Issues**
-```python
-from vynn_core.config import validate_config
-
-# This will show you what .env file was found and which variables are loaded
-config_info = validate_config()
-print(config_info)
-```
-
-### Basic Usage
-```python
+from datetime import datetime, timezone
 from vynn_core import Article, init_indexes, upsert_articles, find_recent
-from datetime import datetime
 
-# Initialize database (run once)
-init_indexes()
+init_indexes()  # idempotent; safe on every boot
 
-# Create and save articles
-articles = [{
+result = upsert_articles([{
     "url": "https://example.com/nvda-earnings",
-    "title": "NVIDIA Reports Strong Q4 Earnings",
-    "summary": "Record revenue driven by AI chip demand...",
+    "title": "NVIDIA Reports Q4 Earnings",
+    "summary": "Record revenue driven by AI chip demand.",
     "source": "TechNews",
-    "publishedAt": datetime.utcnow(),
-    "entities": {"tickers": ["NVDA"], "keywords": ["earnings", "AI"]},
-    "quality": {"llmScore": 8.5, "reason": "High relevance and recent news"}
-}]
+    "publishedAt": datetime.now(timezone.utc),
+    "entities": {"tickers": ["NVDA"], "keywords": ["earnings"]},
+    "quality": {"llmScore": 8.5, "reason": "High relevance"},
+}])
+# {"created": [...], "updated": [...], "skipped": [...]}
 
-result = upsert_articles(articles)
-print(f"Created: {len(result['created'])}, Updated: {len(result['updated'])}")
-
-# Retrieve recent articles
 recent = find_recent(limit=10)
-for article in recent:
-    print(f"{article['title']} - {article['source']}")
 ```
 
-## Integration with Article Scrapers
+## Idempotency
 
-```python
-from vynn_core import Article, upsert_articles
+`upsert_articles` dedupes on `urlHash` — a SHA-256 of the URL with `utm_*`
+parameters stripped — which carries a unique index. Re-ingesting the same
+article is a no-op, and the three-way return says which outcome each document
+took:
 
-# Process scraped articles
-def process_scraped_articles(scraped_data_list):
-    articles = []
-    for data in scraped_data_list:
-        # Convert to vynn_core format
-        article = Article(
-            url=data["url"],
-            title=data["title"],
-            summary=data["summary"],
-            source=data["source"],
-            publishedAt=data["published_at"],
-            entities={"tickers": data.get("tickers", []), "keywords": data.get("keywords", [])},
-            quality={"llmScore": data.get("score", 5.0), "reason": "Scraped content"}
-        )
-        articles.append(article.to_mongo_dict())
-    
-    # Save to database with automatic deduplication
-    return upsert_articles(articles)
+- **created** — no row with that `urlHash` existed.
+- **updated** — a row existed and at least one source field differed.
+- **skipped** — a row existed and every source field matched.
 
-# Use in your scraper
-result = process_scraped_articles(your_scraped_articles)
-```
+A skipped document does **not** have its `updatedAt` touched. The comparison
+excludes `_id`, `createdAt` and `updatedAt`, and normalises values to BSON
+semantics (UTC, millisecond precision) before comparing — otherwise an aware,
+microsecond-precision scraper timestamp would differ from the naive value
+PyMongo returns, and every ingestion pass would report the whole corpus as
+modified. `DuplicateKeyError` from a concurrent writer is caught and counted as
+skipped rather than raised.
 
-## API Reference
+## Public API
 
-### Core Functions
-- `init_indexes()` - Initialize database indexes (idempotent)
-- `test_connection()` - Test MongoDB connectivity
-- `upsert_articles(docs)` - Save articles with deduplication
-- `get_articles_by_ids(ids)` - Retrieve articles by ObjectId
-- `find_recent(limit, source)` - Get recent articles
-- `get_article_by_url(url)` - Find article by URL
+Exported from `vynn_core/__init__.py`:
 
-### Models
-- `Article` - Pydantic model with auto URL hashing
-- Auto-generates `urlHash` from URL (UTM params removed)
-- Validates data structure and types
+| Symbol | Signature |
+| --- | --- |
+| `Article` | Pydantic model; auto-fills `urlHash` from `url`; `.to_mongo_dict()` |
+| `init_indexes` | `(collection_name="articles")` |
+| `test_connection` | `()` → status, server version, collection names |
+| `upsert_articles` | `(docs, collection_name="articles")` |
+| `get_articles_by_ids` | `(ids, collection_name="articles")` |
+| `find_recent` | `(collection_name="articles", limit=50, before_date=None)` |
+| `get_article_by_url` | `(url, collection_name="articles")` |
+| `url_hash` | `(url)` → SHA-256 of the UTM-stripped URL |
+| `utc_now` | `()` → aware UTC datetime |
 
-### Utilities
-- `url_hash(url)` - Generate SHA256 hash from clean URL
-- `utc_now()` - Get current UTC datetime
+`collection_name` now has a default on every function that takes one, so
+existing callers that already pass it positionally are unaffected. Note that
+`find_recent` takes `collection_name` **first**; pass `limit` and `before_date`
+as keywords.
 
-## Testing
+Not exported, but importable: `vynn_core.db.mongo.get_db` /
+`get_mongo_client`, `vynn_core.db.redis.get_redis_client`,
+`vynn_core.feed.fanout.push`, `vynn_core.feed.ranking.compute_score`,
+`vynn_core.dao.articles.get_last_n_hours_news`, and
+`vynn_core.dao.users.match_user_ids_for_article` (a stub that returns `[]`;
+user matching is not implemented).
 
-### Without Database
+## Storage
+
+Mongo and Redis clients are lazily-created, lock-guarded singletons with
+connection pooling. `init_indexes()` builds four indexes in the background:
+`urlHash` (unique, the dedupe key), `publishedAt` descending,
+`(publishedAt, source)` compound, and `publish_date` descending — the last
+covering the ISO-string field the ingestion contract actually sorts on, so a
+ticker news refresh does not sort the collection in memory.
+
+Article documents carry `url`, `urlHash`, `title`, `summary`, `source`,
+optional `image`, `publishedAt`, `entities` (`tickers`, `keywords`), `quality`
+(`llmScore`, `reason`), `createdAt` and `updatedAt`.
+
+## Tests
+
 ```bash
-python test_functionality.py
+pip install -r requirements-test.lock
+pytest -q tests
 ```
 
-### With MongoDB
-```bash
-python test_mongodb.py
-```
+4 passed, 3 skipped. The 3 skips are `tests/test_mongodb.py`, an operator
+connectivity script that contacts the configured database; it is skipped under
+`pytest` collection so it cannot mutate a developer's real instance, and is run
+directly when you want it. Unit tests use `mongomock`. CI runs this on Python
+3.11 against `requirements-test.lock`.
 
-## Database Schema
+See [INTEGRATION.md](INTEGRATION.md) for consumer-side examples.
 
-### Articles Collection
-```javascript
-{
-  "_id": ObjectId,
-  "url": "https://example.com/article",
-  "urlHash": "sha256_hash_of_clean_url", // Unique index
-  "title": "Article Title",
-  "summary": "Article summary...",
-  "source": "Source Name",
-  "image": "https://example.com/image.jpg", // Optional
-  "publishedAt": ISODate,
-  "entities": {
-    "tickers": ["NVDA", "AAPL"],
-    "keywords": ["earnings", "AI"]
-  },
-  "quality": {
-    "llmScore": 8.5,
-    "reason": "High relevance and recent news"
-  },
-  "createdAt": ISODate,
-  "updatedAt": ISODate
-}
-```
+## Licence
 
-### Indexes
-- `urlHash` (unique) - For deduplication
-- `publishedAt, source` (compound) - For recent queries
-- `publishedAt` (descending) - For time-based queries
-
-## Error Handling
-
-The package includes comprehensive error handling and logging:
-- Connection failures are logged and re-raised
-- Invalid articles are skipped with logging
-- Duplicate key errors are handled gracefully
-- All database operations include try-catch blocks
-
-## Performance Notes
-
-- Uses MongoDB connection pooling
-- Batch operations for efficiency
-- Background index creation
-- URL normalization removes UTM parameters
-- Automatic deduplication by URL hash
-
-For detailed integration examples, see [INTEGRATION.md](INTEGRATION.md).
+VYNN AI Proprietary Licence — All Rights Reserved.
+Copyright (c) 2026 Zanwen Fu, VYNN AI (https://vynnai.com).
+Source is available for viewing and evaluation only; see [LICENSE](LICENSE).
