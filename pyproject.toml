@@ -1,9 +1,9 @@
 [project]
 name = "vynn_core"
 version = "0.1.0"
-description = "Minimal, production-ready news feed data layer for MongoDB/Redis."
+description = "The shared news data layer behind VYNN AI: articles in MongoDB, feeds in Redis."
 authors = [
-    {name = "vynn_core", email = "dev@vynn.com"}
+    {name = "VYNN AI", email = "zanwen.fu@duke.edu"}
 ]
 readme = "README.md"
 requires-python = ">=3.9"

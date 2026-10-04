@@ -1,184 +1,93 @@
-# vynn_core
+# vynn-core
 
-Minimal, production-ready news feed data layer for MongoDB/Redis.
+The shared news data layer behind [VYNN AI](https://vynnai.com): articles stored once in MongoDB and deduplicated by URL, and per-user feeds in Redis. The [agent](https://github.com/Agentic-Analyst/stock-analyst) and VYNN's API both depend on it, pinned to a commit.
 
-## Features
-- 🗄️ Singleton Mongo/Redis clients with connection pooling
-- 📰 Article upsert, dedupe, and retrieval with URL hashing
-- 👥 User matching by watchlist (extensible)
-- 📡 Feed fan-out with Redis ZADD
-- ✅ Pydantic schema validation for articles
-- 🔄 Idempotent index creation and operations
-- 🧪 Comprehensive testing with mongomock support
+## Install
 
-## Quick Start
-
-### Installation
 ```bash
-pip install -e libs/vynn_core
+pip install "vynn-core @ git+https://github.com/Agentic-Analyst/vynn-core.git"
 ```
 
-### Configuration
-vynn_core automatically loads environment variables from a `.env` file in your project root.
+Requires Python 3.9 or later. In production, pin a commit (`...vynn-core.git@<commit>`), as the agent does.
 
-**Step 1: Create .env file in your project**
-```bash
-# In your backend/application root directory
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/
-MONGO_DB=your-database-name
-REDIS_URL=redis://localhost:6379/0
-```
+## Configure
 
-**Step 2: Import vynn_core (it will automatically load .env)**
-```python
-# vynn_core will automatically find and load your .env file
-from vynn_core import Article, init_indexes, upsert_articles
+vynn-core reads its settings from the environment when it is imported. It does not load a `.env` file itself, so load yours first (for example with `python-dotenv`).
 
-# Initialize database
-init_indexes()
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `MONGO_URI` | none, required | Article storage |
+| `MONGO_DB` | none, required | The database to use |
+| `REDIS_URL` | `redis://localhost:6379` | Feed fan-out |
 
-**Debugging Configuration Issues**
-```python
-from vynn_core.config import validate_config
-
-# This will show you what .env file was found and which variables are loaded
-config_info = validate_config()
-print(config_info)
-```
-
-### Basic Usage
-```python
-from vynn_core import Article, init_indexes, upsert_articles, find_recent
-from datetime import datetime
-
-# Initialize database (run once)
-init_indexes()
-
-# Create and save articles
-articles = [{
-    "url": "https://example.com/nvda-earnings",
-    "title": "NVIDIA Reports Strong Q4 Earnings",
-    "summary": "Record revenue driven by AI chip demand...",
-    "source": "TechNews",
-    "publishedAt": datetime.utcnow(),
-    "entities": {"tickers": ["NVDA"], "keywords": ["earnings", "AI"]},
-    "quality": {"llmScore": 8.5, "reason": "High relevance and recent news"}
-}]
-
-result = upsert_articles(articles)
-print(f"Created: {len(result['created'])}, Updated: {len(result['updated'])}")
-
-# Retrieve recent articles
-recent = find_recent(limit=10)
-for article in recent:
-    print(f"{article['title']} - {article['source']}")
-```
-
-## Integration with Article Scrapers
+## Use
 
 ```python
-from vynn_core import Article, upsert_articles
+from datetime import datetime, timezone
 
-# Process scraped articles
-def process_scraped_articles(scraped_data_list):
-    articles = []
-    for data in scraped_data_list:
-        # Convert to vynn_core format
-        article = Article(
-            url=data["url"],
-            title=data["title"],
-            summary=data["summary"],
-            source=data["source"],
-            publishedAt=data["published_at"],
-            entities={"tickers": data.get("tickers", []), "keywords": data.get("keywords", [])},
-            quality={"llmScore": data.get("score", 5.0), "reason": "Scraped content"}
-        )
-        articles.append(article.to_mongo_dict())
-    
-    # Save to database with automatic deduplication
-    return upsert_articles(articles)
+from vynn_core import find_recent, init_indexes, upsert_articles
 
-# Use in your scraper
-result = process_scraped_articles(your_scraped_articles)
+init_indexes()  # idempotent: safe to call on every start
+
+result = upsert_articles([{
+    "url": "https://example.com/nvda-earnings?utm_source=newsletter",
+    "title": "NVIDIA reports record revenue",
+    "summary": "Data center demand drove the quarter.",
+    "source": "Example News",
+    "publishedAt": datetime.now(timezone.utc),
+    "entities": {"tickers": ["NVDA"], "keywords": ["earnings"]},
+}])
+print(result)  # {"created": [...], "updated": [...], "skipped": [...]}
+
+for article in find_recent(limit=5):
+    print(article["title"], "|", article["source"])
 ```
 
-## API Reference
+Saving the same article again, even with different `utm_*` tracking parameters, never creates a second record: an unchanged copy is skipped and a changed one updates it.
 
-### Core Functions
-- `init_indexes()` - Initialize database indexes (idempotent)
-- `test_connection()` - Test MongoDB connectivity
-- `upsert_articles(docs)` - Save articles with deduplication
-- `get_articles_by_ids(ids)` - Retrieve articles by ObjectId
-- `find_recent(limit, source)` - Get recent articles
-- `get_article_by_url(url)` - Find article by URL
+## API
 
-### Models
-- `Article` - Pydantic model with auto URL hashing
-- Auto-generates `urlHash` from URL (UTM params removed)
-- Validates data structure and types
+| Function | What it does |
+|---|---|
+| `init_indexes()` | Creates the indexes below; idempotent |
+| `test_connection()` | Checks that MongoDB is reachable |
+| `upsert_articles(docs)` | Saves dicts or `Article` models, deduplicated by URL; returns created and updated IDs and the URL hashes it skipped |
+| `get_articles_by_ids(ids)` | Fetches articles by ID |
+| `get_article_by_url(url)` | Fetches one article by its URL |
+| `find_recent(limit=50, before_date=None)` | The newest articles first |
+| `url_hash(url)` | SHA-256 of the URL with `utm_*` parameters removed |
+| `utc_now()` | The current time in UTC |
+| `Article` | The Pydantic model; fills in `urlHash` from the URL |
 
-### Utilities
-- `url_hash(url)` - Generate SHA256 hash from clean URL
-- `utc_now()` - Get current UTC datetime
+For feeds, `vynn_core.dao.users.match_user_ids_for_article(entities)` finds users whose watchlist holds an article's tickers, `vynn_core.feed.ranking.compute_score(...)` scores it for a user, and `vynn_core.feed.fanout.push(article_id, user_ids, score)` adds it to each user's Redis feed (`feed:<user_id>`).
 
-## Testing
+## Data model
 
-### Without Database
+An article in the `articles` collection:
+
+| Field | Type |
+|---|---|
+| `url`, `urlHash` | The source URL, and its hash (unique) |
+| `title`, `summary`, `source` | Text |
+| `image` | Optional URL |
+| `publishedAt` | When the source published it |
+| `entities` | `{"tickers": [...], "keywords": [...]}` |
+| `quality` | `{"llmScore": ..., "reason": ...}`, from the agent's screening |
+| `createdAt`, `updatedAt` | Set on write |
+
+Indexes: `urlHash` (unique), `publishedAt` with `source`, `publishedAt`, and `publish_date` (the timestamp field the agent's news ingestion writes), plus `watchlist.tickers` on `users` for feed matching.
+
+## Tests
+
 ```bash
-python test_functionality.py
+pip install -e ".[test]"
+python -m pytest tests/ -q
 ```
 
-### With MongoDB
-```bash
-python test_mongodb.py
-```
+The MongoDB tests are skipped unless `MONGO_URI` points at a database; the others need no services.
 
-## Database Schema
+More examples: [INTEGRATION.md](INTEGRATION.md).
 
-### Articles Collection
-```javascript
-{
-  "_id": ObjectId,
-  "url": "https://example.com/article",
-  "urlHash": "sha256_hash_of_clean_url", // Unique index
-  "title": "Article Title",
-  "summary": "Article summary...",
-  "source": "Source Name",
-  "image": "https://example.com/image.jpg", // Optional
-  "publishedAt": ISODate,
-  "entities": {
-    "tickers": ["NVDA", "AAPL"],
-    "keywords": ["earnings", "AI"]
-  },
-  "quality": {
-    "llmScore": 8.5,
-    "reason": "High relevance and recent news"
-  },
-  "createdAt": ISODate,
-  "updatedAt": ISODate
-}
-```
+## License
 
-### Indexes
-- `urlHash` (unique) - For deduplication
-- `publishedAt, source` (compound) - For recent queries
-- `publishedAt` (descending) - For time-based queries
-
-## Error Handling
-
-The package includes comprehensive error handling and logging:
-- Connection failures are logged and re-raised
-- Invalid articles are skipped with logging
-- Duplicate key errors are handled gracefully
-- All database operations include try-catch blocks
-
-## Performance Notes
-
-- Uses MongoDB connection pooling
-- Batch operations for efficiency
-- Background index creation
-- URL normalization removes UTM parameters
-- Automatic deduplication by URL hash
-
-For detailed integration examples, see [INTEGRATION.md](INTEGRATION.md).
+Source-available, all rights reserved; see [LICENSE](LICENSE).
